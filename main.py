@@ -5,12 +5,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-import config
+import config_db
 from handlers import router
 
 
 async def main():
-    bot = Bot(token=config.BOT_TOKEN,
+    bot = Bot(token=config_db.BOT_TOKEN,
               default=DefaultBotProperties(
                   parse_mode=ParseMode.HTML
                   # тут ещё много других интересных настроек

@@ -1,11 +1,11 @@
 import asyncio
 from datetime import datetime, timedelta
-from typing import List, Set
+from typing import List, Dict
 import enum
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker, relationship, Mapped, mapped_column, declared_attr
-from sqlalchemy import Integer, String, DateTime, ForeignKey, Interval, select, func
+from sqlalchemy.orm import DeclarativeBase, sessionmaker, Mapped, mapped_column, declared_attr
+from sqlalchemy import Integer, String, DateTime, Interval, select, func
 from sqlalchemy.ext.asyncio import AsyncAttrs
 
 
@@ -30,6 +30,7 @@ class Base(AsyncAttrs, DeclarativeBase):
 class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_name: Mapped[str] = mapped_column(String, nullable=False)
+    # and other params
 
 
 # Таблица поездок
@@ -37,7 +38,7 @@ class Trip(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     datetime_start: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     datetime_finish: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), nullable=False)
+    #user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), nullable=False)
     point_from: Mapped[str] = mapped_column(String, nullable=False)
     point_to: Mapped[str] = mapped_column(String, nullable=False)
     distance: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -49,7 +50,6 @@ class UsersTripsLink(Base):
     user_id: Mapped[int]
     trip_id: Mapped[int]
     role: Mapped[RoleEnum]  # enum driver or passanger
-
 
 
 # Создание асинхронного движка
@@ -89,30 +89,43 @@ async def add_trip(
 ) -> Trip:
     async with async_session() as session:
         # Получим пользователя-водителя
-        driver = user_id#await session.get(User, user_id)
+        #driver = user_id
+
+        # получение объектов User, по id
+        # await session.get(User, user_id)
         #if not driver:
         #    raise ValueError("User not found")
         # Получим пассажиров
-        passengers = []
-        for pid in passenger_ids:
-            user = await session.get(User, pid)
-            if user:
-                passengers.append(user.id)
+        #passengers = []
+        #for pid in passenger_ids:
+        #    user = await session.get(User, pid)
+        #    if user:
+        #        passengers.append(user)
+
         new_trip = Trip(
             datetime_start=datetime_start,
             datetime_finish=datetime_finish,
-            user_id=user_id,
+            #user_id=user_id,
             point_from=point_from,
             point_to=point_to,
             distance=distance,
             travel_time=travel_time,
             tag=tag,
-            driver=driver,
-            passengers=passengers#set(passengers)
+            #driver=driver,
+            #passengers=passengers  # set(passengers)
         )
         session.add(new_trip)
         await session.commit()
         await session.refresh(new_trip)
+        # добавим в link таблицу записи о driver, passengers
+        session.add(UsersTripsLink(user_id=user_id,
+                                   trip_id=new_trip.id,
+                                   role=RoleEnum.driver))
+        for passenger_id in passenger_ids:
+            session.add(UsersTripsLink(user_id=passenger_id,
+                                       trip_id=new_trip.id,
+                                       role=RoleEnum.passenger))
+        await session.commit()
         return new_trip
 
 
@@ -124,13 +137,29 @@ async def get_trips():
         return trips
 
 
-# Получение пассажиров для конкретной поездки
-async def get_passengers(trip_id: int) -> List[User]:
+# Получение пассажиров и водителя для конкретной поездки
+async def get_users_by_trip(trip: Trip | int) -> Dict:
+    if isinstance(trip, Trip):
+        pass
+    elif isinstance(trip, int):
+        async with async_session() as session:
+            trip = await session.get(Trip, trip)
+    else:
+        # another class
+        pass
     async with async_session() as session:
-        trip = await session.get(Trip, trip_id)
-        if trip:
-            return list(trip.passengers)
-        return []
+        res = await session.execute(select(UsersTripsLink.user_id).filter(UsersTripsLink.trip_id == trip.id,
+                                 UsersTripsLink.role == RoleEnum.driver))
+        driver_id = res.first()[0]
+        driver = await session.get(User, driver_id)
+
+        result = await session.execute(select(UsersTripsLink.user_id).filter(UsersTripsLink.trip_id == trip.id,
+                                                                     UsersTripsLink.role == RoleEnum.passenger))
+        passenger_ids = result.scalars().all()
+        result2 = await session.execute(select(User).where(User.id.in_(passenger_ids)))
+        passengers = result2.scalars().all()
+
+        return {'driver': driver, 'passengers': passengers}
 
 
 # Пример использования
@@ -159,13 +188,11 @@ async def main():
     # Получение всех поездок
     trips = await get_trips()
     for t in trips:
-        print(f"Trip {t.id} от {t.point_from} до {t.point_to}, водитель: {t.driver.user_name}")
+        users = await get_users_by_trip(t)
+        print(f"Trip {t.id} от {t.point_from} до {t.point_to}, "
+              f"водитель: {users.get('driver').user_name}, "
+              f"пассажиры: {[user.user_name for user in users.get('passengers')]}")
 
-    # Получение пассажиров
-    passengers = await get_passengers(trip.id)
-    print("Пассажиры:")
-    for p in passengers:
-        print(p.user_name)
 
 
 if __name__ == "__main__":

@@ -1,20 +1,23 @@
 from aiogram import types, F, Router
 from aiogram.types import Message, ReplyKeyboardRemove
 from aiogram.filters import Command, StateFilter
+from aiogram.fsm.context import FSMContext
 
 import kb
 import states
 from kb import menu_main
-
-from aiogram.fsm.context import FSMContext
+from models import DB
+import utils
 
 
 router = Router()
+database = DB()
+database.init_db()
 
 
 @router.message(Command("start"))
 async def start_handler(message: types.Message):
-    await message.answer("Привет! Я помогу тебе узнать твой ID, просто отправь мне любое сообщение")
+    await message.answer("Привет! Здесь ты можешь создать поездку и найти себе попутчиков")
     await message.answer(
         "Выберите действие:",
         reply_markup=menu_main,)
@@ -103,9 +106,15 @@ async def trip_finish_time_chosen(message: Message, state: FSMContext):
 async def trip_finish_point_chosen(message: Message, state: FSMContext):
     await state.update_data(trip_finish_time=message.text.lower())
     user_data = await state.get_data()  # TODO передача данных на создание модели, храниение в бд статистики
+    await database.add_trip(datetime_start=utils.convert_str_to_dt(user_data['trip_start_time']),
+                            datetime_finish=utils.convert_str_to_dt(user_data['trip_finish_time']),
+                            user_id=message.from_user.id,
+                            point_from=user_data['trip_start_point'],
+                            point_to=user_data['trip_finish_point'],
+                            )
     await message.answer(
-        text=f"Вы создали поездку '{user_data['trip_name']}' /r/n"
-             f"старт: {user_data['trip_start_point']} в {user_data['trip_start_time']} /r/n"
+        text=f"Вы создали поездку '{user_data['trip_name']}' "
+             f"старт: {user_data['trip_start_point']} в {user_data['trip_start_time']} "
              f"финиш: {user_data['trip_finish_point']} в {user_data['trip_finish_time']}.",
         reply_markup=menu_main  # ReplyKeyboardRemove()  # or man_menu_kb
     )
@@ -117,6 +126,6 @@ async def without_puree(message: types.Message):
     await message.reply("список с цифрами")
 
 
-@router.message()
-async def message_handler(message: types.Message):
-    await message.answer(f"Твой ID: {message.from_user.id}")
+#@router.message()
+#async def message_handler(message: types.Message):
+#    await message.answer(f"Твой ID: {message.from_user.id}")

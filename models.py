@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import enum
+import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker, Mapped, mapped_column, declared_attr
@@ -28,7 +29,7 @@ class Base(AsyncAttrs, DeclarativeBase):
 
 # Таблица пользователей
 class User(Base):
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tg_id: Mapped[int] = mapped_column(Integer, nullable=False)  # primary_key=True)
     user_name: Mapped[str] = mapped_column(String, nullable=False)
     # and other params
 
@@ -60,7 +61,7 @@ class DB:
 
     def __init__(self):
         # Создание асинхронного движка
-        DATABASE_URL = "sqlite+aiosqlite:///./test_db.db"
+        DATABASE_URL = "sqlite+aiosqlite:///./db/test_db.db"
 
         self.engine = create_async_engine(DATABASE_URL, echo=True)
         self.async_session = sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
@@ -73,25 +74,35 @@ class DB:
             await conn.run_sync(self.base.metadata.create_all)
 
     # Добавление пользователя
-    async def add_user(self, user_name: str) -> User:
+    async def add_user(self, user_name: str, tg_id: int) -> User:
         async with self.async_session() as session:
-            user = User(user_name=user_name)
+            user = User(user_name=user_name, tg_id=tg_id)
             session.add(user)
             await session.commit()
             await session.refresh(user)
             return user
 
+    async def get_user_id_by_tgid(self, id: int) -> int:
+        async with self.async_session() as session:
+            res = await session.execute(select(User.id).filter(User.tg_id == id))
+            user_id = res.first()[0]
+            if user_id:
+                return user_id
+            else:
+                logging.warning(f'Неизвестный пользователь с tg_id: {user_id}')
+
+
     # Добавление новой поездки
     async def add_trip(self,
                        datetime_start: datetime,
-                       datetime_finish: datetime,
+                       datetime_finish: datetime | None,
                        user_id: int,
                        point_from: str,
                        point_to: str,
-                       distance: int,
-                       travel_time: timedelta,
-                       tag: str,
-                       passenger_ids: List[int],
+                       distance: int = 0,
+                       travel_time: timedelta = timedelta(days=0),
+                       tag: str = '',
+                       passenger_ids: List[int] = [],
                        price: int = 0
                        ) -> Trip:
         async with self.async_session() as session:
@@ -109,6 +120,9 @@ class DB:
             session.add(new_trip)
             await session.commit()
             await session.refresh(new_trip)
+            # получим системный user_id по его tg_id для водителя\создателя поездки и пассажиров
+            user_id = await self.get_user_id_by_tgid(id=user_id)
+            passenger_ids = [await self.get_user_id_by_tgid(id=pid) for pid in passenger_ids]
             # добавим в link таблицу записи о driver, passengers
             session.add(UsersTripsLink(user_id=user_id,
                                        trip_id=new_trip.id,
@@ -140,6 +154,7 @@ class DB:
         async with self.async_session() as session:
             res = await session.execute(select(UsersTripsLink.user_id).filter(UsersTripsLink.trip_id == trip.id,
                                      UsersTripsLink.role == RoleEnum.driver))
+
             driver_id = res.first()[0]
             driver = await session.get(User, driver_id)
 
@@ -159,21 +174,21 @@ async def main():
     await database.init_db()
 
     # Создаем пользователей
-    user1 = await database.add_user("Ivan")
-    user2 = await database.add_user("Anna")
-    user3 = await database.add_user("Sergey")
+    user1 = await database.add_user("Ivan", tg_id=76567567)
+    user2 = await database.add_user("Anna", tg_id=76876897)
+    user3 = await database.add_user("Sergey", tg_id=34232432)
 
     # Добавляем поездку с пассажирами
     trip = await database.add_trip(
         datetime_start=datetime(2024, 4, 27, 8, 0),
         datetime_finish=datetime(2024, 4, 27, 10, 0),
-        user_id=user1.id,
+        user_id=user1.tg_id,
         point_from="Санкт-Петербург",
         point_to="Москва",
         distance=700,
         travel_time=timedelta(hours=2),
         tag="business",
-        passenger_ids=[user2.id, user3.id]
+        passenger_ids=[user2.tg_id, user3.tg_id]
     )
     print(f"Добавлена поездка: {trip.id} от {trip.point_from} до {trip.point_to}")
 
